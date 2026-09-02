@@ -37,25 +37,6 @@ output "cloudfront_distribution_id" {
 }
 
 # ------------------------------------------------------------------------------
-# EC2 / ALB
-# ------------------------------------------------------------------------------
-
-output "ec2_instance_ids" {
-  description = "IDs of the created EC2 instances"
-  value       = module.ec2.instance_ids
-}
-
-output "ec2_private_ips" {
-  description = "Private IP addresses of the EC2 instances"
-  value       = module.ec2.private_ips
-}
-
-output "alb_dns_name" {
-  description = "Public DNS name of the load balancer - this is the URL users hit to reach the EC2-backed app"
-  value       = module.alb.alb_dns_name
-}
-
-# ------------------------------------------------------------------------------
 # EKS
 # ------------------------------------------------------------------------------
 

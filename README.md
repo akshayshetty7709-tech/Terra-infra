@@ -1,9 +1,13 @@
 # my-terraform-project
 
 Standard, environment-aware Terraform project structure for provisioning AWS
-infrastructure — VPC, EC2 behind an ALB, S3 + CloudFront, and EKS with
-control-plane logging and IRSA — using reusable modules, per-environment
-configuration, and baseline CloudWatch monitoring.
+infrastructure — VPC, S3 + CloudFront, and EKS with control-plane logging
+and IRSA — using reusable modules, per-environment configuration, and
+baseline CloudWatch/SNS alerting.
+
+Application workloads run as containers on EKS. Kubernetes Services/Ingress
+manage their own load balancers (via the AWS Load Balancer Controller) - see
+"How Users Reach the Application" below.
 
 ## Project Structure
 
@@ -18,16 +22,6 @@ my-terraform-project/
 ├── modules/
 │   ├── vpc/
 │   │   ├── main.tf                # VPC, subnets, IGW, NAT, route tables
-│   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── versions.tf
-│   ├── alb/
-│   │   ├── main.tf                # Internet-facing ALB, target group, listener(s)
-│   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── versions.tf
-│   ├── ec2/
-│   │   ├── main.tf                # Security group + EC2 instance(s), registered to ALB
 │   │   ├── variables.tf
 │   │   ├── outputs.tf
 │   │   └── versions.tf
@@ -47,7 +41,7 @@ my-terraform-project/
 │   │   ├── outputs.tf
 │   │   └── versions.tf
 │   └── monitoring/
-│       ├── main.tf                # SNS topic + CloudWatch alarms (EC2 CPU, ALB errors)
+│       ├── main.tf                # SNS topic for alarm notifications
 │       ├── variables.tf
 │       ├── outputs.tf
 │       └── versions.tf
@@ -69,23 +63,21 @@ my-terraform-project/
 | Module | Purpose |
 |---|---|
 | `vpc` | VPC, public/private subnets, internet gateway, NAT gateway, route tables. |
-| `alb` | Internet-facing Application Load Balancer, target group, and HTTP/HTTPS listener(s). This is the public "front door" for the EC2 app. |
-| `ec2` | Security group + one or more EC2 instances (latest Amazon Linux 2023 AMI) in the public subnets, registered as ALB targets. HTTP ingress is restricted to the ALB's security group instead of the open internet. |
 | `s3` | Private, encrypted, versioned S3 bucket used as a static asset origin. |
 | `cloudfront` | CloudFront distribution in front of the S3 bucket via Origin Access Control (OAC), with a bucket policy restricting reads to that distribution. |
 | `eks` | EKS control plane + one managed node group, with cluster/node IAM roles, control-plane logging to CloudWatch, and an IAM OIDC provider for IRSA (IAM Roles for Service Accounts). Deployed into the private subnets. |
-| `monitoring` | SNS topic + CloudWatch alarms for EC2 CPU utilization, ALB 5xx errors, and unhealthy ALB targets. Optional email subscription. |
+| `monitoring` | SNS topic with an optional email subscription. Attach CloudWatch alarms to it (EKS Container Insights, S3/CloudFront metrics, etc.) as your monitoring needs grow. |
 
 ## File Purposes (root)
 
 | File | Purpose |
 |---|---|
-| `main.tf` | Main configuration file. Calls each module (vpc, ec2, s3, cloudfront, eks). |
+| `main.tf` | Main configuration file. Calls each module (vpc, s3, cloudfront, eks, monitoring). |
 | `variables.tf` | Input variables for the configuration, grouped by module. |
 | `outputs.tf` | Output values exported after `terraform apply`. |
 | `providers.tf` | Provider configuration. Defines the cloud provider and credentials/region. |
 | `versions.tf` | Specifies required Terraform version and provider versions. |
-| `environments/<env>/terraform.tfvars` | Environment-specific variable values (CIDR ranges, instance sizes, node counts, etc). |
+| `environments/<env>/terraform.tfvars` | Environment-specific variable values (CIDR ranges, node counts, log retention, etc). |
 | `environments/<env>/backend.tf` | Environment-specific remote state backend settings (S3 bucket, key, DynamoDB lock table). |
 | `backend.tf` | Optional root backend stub; actual backend values are supplied per-environment at `init` time. |
 
@@ -95,8 +87,11 @@ my-terraform-project/
 - AWS CLI configured with valid credentials (`aws configure`)
 - An S3 bucket + DynamoDB table for remote state locking (per environment),
   or update `backend.tf` files to match your chosen backend.
-- `kubectl` and the AWS CLI's `aws eks update-kubeconfig` if you plan to
-  interact with the EKS cluster after apply.
+- `kubectl` and `aws eks update-kubeconfig` to interact with the cluster
+  after apply.
+- The [AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/)
+  installed into the cluster (via Helm) if you want Kubernetes Services/
+  Ingress to provision ALBs/NLBs automatically - see below.
 
 ## Usage
 
@@ -131,16 +126,30 @@ terraform init -reconfigure -backend-config=environments/staging/backend.tf
 terraform plan -var-file=environments/staging/terraform.tfvars
 ```
 
-### Connecting to the EKS cluster after apply
+> Tip: for larger teams, consider Terraform Workspaces or separate state
+> per environment (as modeled here) — this layout uses the latter, which is
+> generally safer for prod isolation.
+
+## How Users Reach the Application
+
+This project provisions the EKS cluster itself; it does not deploy
+application workloads. Once the cluster exists:
 
 ```bash
 aws eks update-kubeconfig --name my-terraform-project-dev-eks --region us-east-1
 kubectl get nodes
 ```
 
-> Tip: for larger teams, consider Terraform Workspaces or separate state
-> per environment (as modeled here) — this layout uses the latter, which is
-> generally safer for prod isolation.
+To expose an app publicly, deploy it to the cluster and create a Kubernetes
+`Service` of type `LoadBalancer` or an `Ingress` resource. If the AWS Load
+Balancer Controller is installed, it will automatically provision an
+ALB/NLB and route traffic to your pods - this is managed by Kubernetes
+manifests (or Helm charts), not by this Terraform project. Pods can assume
+scoped IAM roles via IRSA using `eks_oidc_provider_arn` as the trust
+principal, instead of relying on the node's IAM role.
+
+Static assets (a frontend build, images, etc.) are served separately via
+CloudFront, at the `cloudfront_domain_name` output.
 
 ## Adding a New Module
 
@@ -150,13 +159,6 @@ kubectl get nodes
 
 ## Notes on Included Resources
 
-- **ALB**: internet-facing, terminates HTTP (and HTTPS if you set
-  `alb_certificate_arn` to an ACM certificate). Users hit the ALB's DNS name
-  (`alb_dns_name` output) — not the EC2 instances directly.
-- **EC2** instances are placed in **public** subnets but only accept HTTP
-  traffic from the ALB's security group, not the open internet. Adjust
-  `ec2_allowed_ssh_cidrs` to lock down SSH access — it's empty (closed) by
-  default in staging/prod.
 - **S3 + CloudFront**: the bucket has all public access blocked; only the
   CloudFront distribution (via OAC + bucket policy) can read from it.
 - **EKS** node group and control plane run in the **private** subnets;
@@ -166,31 +168,33 @@ kubectl get nodes
   IAM OIDC provider is created so you can attach IRSA roles to Kubernetes
   ServiceAccounts (create the per-workload roles separately, trusting
   `eks_oidc_provider_arn`).
-- **Monitoring**: a single SNS topic (`sns_alerts_topic_arn`) receives
-  CloudWatch alarm notifications for EC2 CPU, ALB 5xx rate, and unhealthy
-  ALB targets. Set `alarm_email` in tfvars to get an email subscription
-  (AWS will send a confirmation link you must click).
-- Instance sizes / node counts / alarm thresholds scale from `dev` →
+- **Monitoring**: a single SNS topic (`sns_alerts_topic_arn`) is ready to
+  receive alarm notifications. Set `alarm_email` in tfvars to get an email
+  subscription (AWS sends a confirmation link you must click). No alarms
+  are wired up by default since there are no EC2/ALB metrics to alarm on -
+  add EKS Container Insights alarms, S3 request-error alarms, or CloudFront
+  error-rate alarms as needed and point their `alarm_actions` at
+  `module.monitoring.sns_topic_arn`.
+- Node counts / log retention / alarm settings scale from `dev` →
   `staging` → `prod` in the provided `terraform.tfvars` files; adjust to
   your actual workload and budget.
 
 ## Still Missing for Full Enterprise-Grade Use
 
-This project now covers load balancing, EKS logging/IRSA, and baseline
-alarms, but a platform team would typically still add:
+This project covers networking, static content delivery, and a logged/
+IRSA-ready EKS cluster, but a platform team would typically still add:
 
-- Auto Scaling Groups (currently EC2 is a fixed instance count, not
-  self-healing/elastic)
+- Application deployment tooling for EKS (Helm charts, ArgoCD/Flux, the
+  AWS Load Balancer Controller itself, cluster autoscaler)
 - Multiple NAT gateways (one per AZ) for high availability
-- WAF in front of the ALB / CloudFront
-- Centralized logging (e.g., CloudWatch Logs → S3/OpenSearch) and
-  distributed tracing
+- WAF in front of CloudFront / the ALB Ingress creates
+- Container Insights / Prometheus + Grafana for cluster observability
 - CI/CD for Terraform (plan/apply pipeline, policy checks with
   `tflint`/`tfsec`/`checkov`)
 - Module registry + semantic versioning for the modules
 - Multi-account structure (separate AWS accounts per environment)
-- Secrets management (AWS Secrets Manager / SSM Parameter Store)
-  integration for application config
+- Secrets management (AWS Secrets Manager / SSM Parameter Store, or
+  External Secrets Operator in-cluster) for application config
 
 ## Conventions
 

@@ -34,32 +34,6 @@ module "cloudfront" {
   price_class                    = var.cloudfront_price_class
 }
 
-module "alb" {
-  source = "./modules/alb"
-
-  project_name      = var.project_name
-  environment       = var.environment
-  vpc_id            = module.vpc.vpc_id
-  public_subnet_ids = module.vpc.public_subnet_ids
-  health_check_path = var.alb_health_check_path
-  certificate_arn   = var.alb_certificate_arn
-}
-
-module "ec2" {
-  source = "./modules/ec2"
-
-  project_name          = var.project_name
-  environment           = var.environment
-  vpc_id                = module.vpc.vpc_id
-  subnet_ids            = module.vpc.public_subnet_ids
-  instance_count        = var.ec2_instance_count
-  instance_type         = var.ec2_instance_type
-  key_name              = var.ec2_key_name
-  allowed_ssh_cidrs     = var.ec2_allowed_ssh_cidrs
-  alb_security_group_id = module.alb.alb_security_group_id
-  target_group_arn      = module.alb.target_group_arn
-}
-
 module "eks" {
   source = "./modules/eks"
 
@@ -79,12 +53,7 @@ module "eks" {
 module "monitoring" {
   source = "./modules/monitoring"
 
-  project_name            = var.project_name
-  environment             = var.environment
-  alarm_email             = var.alarm_email
-  ec2_instance_ids        = module.ec2.instance_ids
-  cpu_alarm_threshold     = var.cpu_alarm_threshold
-  alb_arn_suffix          = module.alb.alb_arn_suffix
-  target_group_arn_suffix = module.alb.target_group_arn_suffix
-  alb_5xx_threshold       = var.alb_5xx_threshold
+  project_name = var.project_name
+  environment  = var.environment
+  alarm_email  = var.alarm_email
 }

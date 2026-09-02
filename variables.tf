@@ -80,34 +80,6 @@ variable "cloudfront_price_class" {
 }
 
 # ------------------------------------------------------------------------------
-# EC2
-# ------------------------------------------------------------------------------
-
-variable "ec2_instance_count" {
-  description = "Number of EC2 instances to create"
-  type        = number
-  default     = 1
-}
-
-variable "ec2_instance_type" {
-  description = "EC2 instance type"
-  type        = string
-  default     = "t3.micro"
-}
-
-variable "ec2_key_name" {
-  description = "Name of an existing EC2 key pair for SSH access. Leave empty to disable key-based SSH."
-  type        = string
-  default     = ""
-}
-
-variable "ec2_allowed_ssh_cidrs" {
-  description = "CIDR blocks allowed to SSH into EC2 instances"
-  type        = list(string)
-  default     = []
-}
-
-# ------------------------------------------------------------------------------
 # EKS
 # ------------------------------------------------------------------------------
 
@@ -154,22 +126,6 @@ variable "eks_cluster_log_retention_days" {
 }
 
 # ------------------------------------------------------------------------------
-# ALB
-# ------------------------------------------------------------------------------
-
-variable "alb_health_check_path" {
-  description = "Path used by the ALB target group health check"
-  type        = string
-  default     = "/"
-}
-
-variable "alb_certificate_arn" {
-  description = "ACM certificate ARN for the ALB HTTPS listener. Leave empty to serve HTTP only."
-  type        = string
-  default     = ""
-}
-
-# ------------------------------------------------------------------------------
 # Monitoring
 # ------------------------------------------------------------------------------
 
@@ -177,16 +133,4 @@ variable "alarm_email" {
   description = "Email address to receive CloudWatch alarm notifications. Leave empty to skip the email subscription."
   type        = string
   default     = ""
-}
-
-variable "cpu_alarm_threshold" {
-  description = "EC2 CPU utilization percentage that triggers an alarm"
-  type        = number
-  default     = 80
-}
-
-variable "alb_5xx_threshold" {
-  description = "Number of ALB 5xx errors in a 5-minute period that triggers an alarm"
-  type        = number
-  default     = 10
 }
